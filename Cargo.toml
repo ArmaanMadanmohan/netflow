@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+netlink-packet-core = "0.7.0"
+netlink-packet-sock-diag = "0.4.2"
+netlink-sys = "0.8.7"
 pcap = "2.2.0"
+rufl = "0.1.3"
 time = "0.3.41"

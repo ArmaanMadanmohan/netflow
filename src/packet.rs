@@ -286,6 +286,8 @@ impl Packet
         } 
     }
 
+    // toSockId
+
     // pub fn isOlderThan
 }
 
@@ -368,3 +370,8 @@ fn parse_ipv6(ipslice: &[u8]) -> Option<Packet>
 // impl fmt::Display?
 
 // thread 'main' panicked at src/packet.rs:72:19: index out of bounds: the len is 0 but the index is 0
+
+// Packet { src_addr: 172.217.16.227, dst_addr: 138.251.223.62, src_port: 18688, dst_port: 117, len: 52, timestamp: SystemTime { tv_sec: 1750274311, tv_nsec: 318677449 }, outgoing: false }
+// error parsing packet
+// error parsing packet
+// Packet { src_addr: 138.251.223.62, dst_addr: 172.67.74.64, src_port: 60736, dst_port: 64, len: 52, timestamp: SystemTime { tv_sec: 1750274311, tv_nsec: 318682850 }, outgoing: false }
