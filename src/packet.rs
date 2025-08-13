@@ -3,7 +3,10 @@
 use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
 use std::time; 
 use pcap::Packet as PcapPkt; 
+use netlink_packet_sock_diag::inet::SocketId;
 // etherparse?
+
+use std::hash::{Hash, Hasher};
 
 const ETHER_ADDR_LEN: usize = 6;
 const IPV6_ADDR_LEN: usize = 16;
@@ -13,6 +16,11 @@ const IPV6_PROTOCOL: u16 = 0x86DD;
 
 const TCP_PROTOCOL: u8 = 6;
 const UDP_PROTOCOL: u8 = 17;
+
+pub enum Protocol {
+    TCP, 
+    UDP,
+}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -286,10 +294,44 @@ impl Packet
         } 
     }
 
-    // toSockId
-
     // pub fn isOlderThan
 }
+
+impl From<&Packet> for SocketId {
+    fn from(pack: &Packet) -> Self {
+        SocketId {
+            source_port: pack.src_port,
+            destination_port: pack.dst_port,
+            source_address: pack.src_addr,
+            destination_address: pack.dst_addr,
+            interface_id: 0,
+            cookie: [0; 8],
+        }
+    }
+}
+
+pub struct SocketWrapper(pub SocketId);
+
+impl Hash for SocketWrapper {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.source_port.hash(state);
+        self.0.destination_port.hash(state);
+        self.0.source_address.hash(state);
+        self.0.destination_address.hash(state);
+    }
+}
+
+impl PartialEq for SocketWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.source_port == other.0.source_port &&
+        self.0.destination_port == other.0.destination_port &&
+        self.0.source_address == other.0.source_address &&
+        self.0.destination_address == other.0.destination_address
+    }
+}
+
+impl Eq for SocketWrapper {}
+
 
 pub fn parse_pkt(pkt: &PcapPkt)-> Option<Packet> 
 { 
@@ -366,12 +408,3 @@ fn parse_ipv6(ipslice: &[u8]) -> Option<Packet>
     }
 }
 
-// from_be_bytes or try_into?
-// impl fmt::Display?
-
-// thread 'main' panicked at src/packet.rs:72:19: index out of bounds: the len is 0 but the index is 0
-
-// Packet { src_addr: 172.217.16.227, dst_addr: 138.251.223.62, src_port: 18688, dst_port: 117, len: 52, timestamp: SystemTime { tv_sec: 1750274311, tv_nsec: 318677449 }, outgoing: false }
-// error parsing packet
-// error parsing packet
-// Packet { src_addr: 138.251.223.62, dst_addr: 172.67.74.64, src_port: 60736, dst_port: 64, len: 52, timestamp: SystemTime { tv_sec: 1750274311, tv_nsec: 318682850 }, outgoing: false }
