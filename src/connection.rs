@@ -4,9 +4,10 @@ use crate::packet::{
 };
 
 use std::{
-    collections::{VecDeque}
+    collections::VecDeque, time::{Duration, SystemTime}
 };
 
+#[derive(Debug)]
 pub struct Connection {
     pub sent: VecDeque<Packet>, 
     pub recv: VecDeque<Packet>,
@@ -16,38 +17,50 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(protocol: Protocol) -> Connection {
+    pub fn new(pkt: Packet) -> Self {
         let new_sent: VecDeque<Packet> = VecDeque::new();
         let new_recv: VecDeque<Packet> = VecDeque::new();
-        Connection {
+        let mut conn = Connection {
             sent: new_sent, 
             recv: new_recv,
             bytes_sent: 0,
             bytes_recvd: 0,
-            conn_type: protocol, 
+            conn_type: pkt.protocol, 
+        };
+        conn.add_packet(pkt);
+        conn
+    }
+
+    pub fn add_packet(&mut self, pkt: Packet) {    
+        if pkt.outgoing {
+            self.bytes_sent += pkt.len;
+            self.sent.push_front(pkt);
+        } else {
+            self.bytes_recvd += pkt.len;
+            self.recv.push_front(pkt);
         }
     }
 
-    pub fn add_packet() {
-        
-    }
+    pub fn refresh_packets(&mut self, period: Duration) {
+        let cutoff = SystemTime::now() - period;
+        while let Some(oldest_sent) = self.sent.back() {
+            if oldest_sent.is_older_than(cutoff) {
+                if let Some(popped) = self.sent.pop_back() {
+                    self.bytes_sent -= popped.len;    
+                }
+            } else {
+                break;
+            }
+        }
 
-    pub fn total_packets() {
-
-    }
-
-    pub fn refresh_packets() {
-
-    }
-
-    pub fn del_packet() {
-
+        while let Some(oldest_recvd) = self.recv.back() {
+            if oldest_recvd.is_older_than(cutoff) {
+                if let Some(popped) = self.recv.pop_back() {
+                    self.bytes_recvd -= popped.len;
+                }
+            } else {
+                break;
+            } 
+        }
     }
 }
-
-
-
-// capture packet. SocketId::from to convert to SocketId, if there is a matching SocketId (would
-// probably need to impl Eq for that.. and Hash! which i can't so.. i guess i have an intermediate
-// storage type for hash then?) then take corresponding Connection and add the packet to
-// the Deque. Else create connection and add packet to empty Deque, link with SocketId  

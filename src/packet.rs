@@ -2,6 +2,7 @@
 // use std::mem::size_of;
 use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
 use std::time; 
+use getifaddrs::Interface;
 use pcap::Packet as PcapPkt; 
 use netlink_packet_sock_diag::inet::SocketId;
 // etherparse?
@@ -17,6 +18,7 @@ const IPV6_PROTOCOL: u16 = 0x86DD;
 const TCP_PROTOCOL: u8 = 6;
 const UDP_PROTOCOL: u8 = 17;
 
+#[derive(Debug, Copy, Clone)]
 pub enum Protocol {
     TCP, 
     UDP,
@@ -269,8 +271,9 @@ pub struct Packet {
     pub src_port: u16,
     pub dst_port: u16,
     pub len: u32,
-    pub timestamp: time::SystemTime, 
+    timestamp: time::SystemTime, 
     pub outgoing: bool, 
+    pub protocol: Protocol,
 }
 
 impl Packet 
@@ -281,6 +284,8 @@ impl Packet
         src_port: u16,
         dst_port: u16,
         len: u32,
+        outgoing: bool,
+        protocol: Protocol,
     ) -> Self
     {
        Self {
@@ -290,11 +295,29 @@ impl Packet
             dst_port, 
             len, 
             timestamp: time::SystemTime::now(),
-            outgoing: false,
+            outgoing,
+            protocol,
         } 
     }
 
-    // pub fn isOlderThan
+    pub fn is_older_than(&self, time: time::SystemTime) -> bool {
+        if self.timestamp < time {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_outgoing(&self, addresses: Vec<Interface>) -> Option<bool> {
+        for addr in addresses {
+             
+        }
+        Some(false)
+        // for addr in addresses
+        // if self.src_addr = addr then return Some(true)
+        // else if self.dst_addr = addr then return Some(false)
+        // else return None?
+    }
 }
 
 impl From<&Packet> for SocketId {
@@ -310,6 +333,7 @@ impl From<&Packet> for SocketId {
     }
 }
 
+#[derive(Debug)]
 pub struct SocketWrapper(pub SocketId);
 
 impl Hash for SocketWrapper {
@@ -352,6 +376,7 @@ fn parse_ipv4(ipslice: &[u8]) -> Option<Packet>
     let pclslice: &[u8] = &ipslice[ipv4.header_len()..];
     let src_addr = IpAddr::V4(Ipv4Addr::from(ipv4.src_addr));
     let dst_addr = IpAddr::V4(Ipv4Addr::from(ipv4.dst_addr));
+    let outgoing = true; // temp
 
     match ipv4.is_tcp()? {
         true => {
@@ -362,6 +387,8 @@ fn parse_ipv4(ipslice: &[u8]) -> Option<Packet>
                 tcp.src_p, 
                 tcp.dst_p, 
                 ipv4.pay_len.into(), 
+                outgoing,
+                Protocol::TCP,
             ))
         },
         false => {
@@ -372,6 +399,8 @@ fn parse_ipv4(ipslice: &[u8]) -> Option<Packet>
                 udp.src_p, 
                 udp.dst_p, 
                 ipv4.pay_len.into(), 
+                outgoing,
+                Protocol::UDP,
             ))
         },
     } 
@@ -383,6 +412,7 @@ fn parse_ipv6(ipslice: &[u8]) -> Option<Packet>
     let pclslice: &[u8] = &ipslice[40..];
     let src_addr = IpAddr::V6(Ipv6Addr::from(ipv6.src_addr));
     let dst_addr = IpAddr::V6(Ipv6Addr::from(ipv6.dst_addr));
+    let outgoing = true; // temp 
 
     match ipv6.is_tcp()? {
         true => {
@@ -393,6 +423,8 @@ fn parse_ipv6(ipslice: &[u8]) -> Option<Packet>
                 tcp.src_p, 
                 tcp.dst_p, 
                 ipv6.pay_len.into(), 
+                outgoing,
+                Protocol::TCP,
             ))
         },
         false => {
@@ -403,6 +435,8 @@ fn parse_ipv6(ipslice: &[u8]) -> Option<Packet>
                 udp.src_p, 
                 udp.dst_p, 
                 ipv6.pay_len.into(), 
+                outgoing,
+                Protocol::UDP,
             ))
         },
     }

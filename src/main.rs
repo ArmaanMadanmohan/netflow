@@ -2,7 +2,7 @@ mod packet;
 mod connection;
 
 use std::{
-    collections::HashMap, fmt::write, fs::{read_dir, File}, io::{BufRead, BufReader, Error, ErrorKind, Read}, option
+    collections::{HashMap, hash_map}, fmt::write, fs::{read_dir, File}, io::{BufRead, BufReader, Error, ErrorKind, Read}, option
 };
 
 use pcap::Device;
@@ -13,6 +13,7 @@ use netlink_packet_core::{
     NLM_F_DUMP, 
     NLM_F_REQUEST,
 };
+use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
 // use netlink_sys;
 use netlink_sys::{protocols::NETLINK_SOCK_DIAG, Socket, SocketAddr};
 use netlink_packet_sock_diag::{
@@ -23,20 +24,42 @@ use netlink_packet_sock_diag::{
     IPPROTO_TCP
 };
 use packet as pkt;
-// use pkt::Packet as Packet;
 // use rufl::string;
 
 use crate::packet::{
-    Protocol, SocketWrapper
+    Protocol, SocketWrapper,
 };
 
 use crate::connection::{
     Connection,
 };
 
+use getifaddrs::{getifaddrs, Interface, InterfaceFlags};
+
+// if neither src nor dst are in the address table maybe update table?
+
 
 fn main() {
-    handle_packet();
+    let interface_list: HashMap<IpAddr, Interface> = HashMap::new();
+    get_interfaces(interface_list);
+    // handle_packet();
+}
+
+fn get_interfaces(interface_list: HashMap<IpAddr, Interface>) {
+    for interface in getifaddrs().unwrap() { // store addresses in address table
+        println!("Interface: {}", interface.name);
+        println!("Address: {}", interface.address);
+        if let Some(netmask) = interface.netmask {
+            println!("  Netmask: {}", netmask);
+        }
+        println!("  Flags: {:?}", interface.flags);
+        if interface.flags.contains(InterfaceFlags::UP) {
+            println!("  Status: Up");
+        } else {
+            println!("  Status: Down");
+        }
+        println!();
+    }
 }
 
 fn handle_packet() {
@@ -56,12 +79,20 @@ fn handle_packet() {
             let sock_id: SocketId = SocketId::from(&pack);
             let socket_wrapper = SocketWrapper(sock_id);
 
-            if socket_to_conn.contains_key(&socket_wrapper) {
-                println!("contains!"); 
-            } else {
-                socket_to_conn.insert(socket_wrapper, Connection::new(Protocol::TCP));
+            // matching on `entry` uses one lookup compared to `contains_key`
+            // followed by `get_mut`
+            match socket_to_conn.entry(socket_wrapper) {
+                hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().add_packet(pack);
+                }
+                hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Connection::new(pack));
+                }
             }
-    
+
+            println!("{:?}", socket_to_conn);
+            return;
+
             // if let Err(e) = send_msg(sock_id.clone(), &socket) { // worth cloning or not
             //     eprintln!("SEND ERROR: {e}");
             //     return;
