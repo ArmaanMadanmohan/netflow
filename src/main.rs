@@ -1,8 +1,10 @@
 mod packet;
 mod connection;
+mod parser;
+mod socketwrapper;
 
 use std::{
-    collections::{HashMap, hash_map}, fmt::write, fs::{read_dir, File}, io::{BufRead, BufReader, Error, ErrorKind, Read}, option
+    collections::{HashSet, HashMap, hash_map}, fmt::write, fs::{read_dir, File}, io::{BufRead, BufReader, Error, ErrorKind, Read}, option
 };
 
 use pcap::Device;
@@ -13,8 +15,9 @@ use netlink_packet_core::{
     NLM_F_DUMP, 
     NLM_F_REQUEST,
 };
-use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
+use std::net::{IpAddr};
 // use netlink_sys;
+// use rufl::string;
 use netlink_sys::{protocols::NETLINK_SOCK_DIAG, Socket, SocketAddr};
 use netlink_packet_sock_diag::{
     // constants::*,
@@ -23,51 +26,39 @@ use netlink_packet_sock_diag::{
     AF_INET, 
     IPPROTO_TCP
 };
-use packet as pkt;
-// use rufl::string;
 
-use crate::packet::{
-    Protocol, SocketWrapper,
+use crate::{
+    socketwrapper::SocketWrapper,
+    connection::Connection,
+    parser::PacketParser,
 };
 
-use crate::connection::{
-    Connection,
-};
-
-use getifaddrs::{getifaddrs, Interface, InterfaceFlags};
+use getifaddrs::{getifaddrs, InterfaceFlags};
 
 // if neither src nor dst are in the address table maybe update table?
 
 
 fn main() {
-    let interface_list: HashMap<IpAddr, Interface> = HashMap::new();
-    get_interfaces(interface_list);
-    // handle_packet();
+    let mut address_table: HashSet<IpAddr> = HashSet::new();
+    update_addresses(&mut address_table);
+    handle_packet(address_table);
 }
 
-fn get_interfaces(interface_list: HashMap<IpAddr, Interface>) {
+fn update_addresses(address_table: &mut HashSet<IpAddr>) {
     for interface in getifaddrs().unwrap() { // store addresses in address table
-        println!("Interface: {}", interface.name);
-        println!("Address: {}", interface.address);
-        if let Some(netmask) = interface.netmask {
-            println!("  Netmask: {}", netmask);
+        if interface.flags.contains(InterfaceFlags::UP) || interface.flags.contains(InterfaceFlags::RUNNING) {
+            address_table.insert(interface.address);
         }
-        println!("  Flags: {:?}", interface.flags);
-        if interface.flags.contains(InterfaceFlags::UP) {
-            println!("  Status: Up");
-        } else {
-            println!("  Status: Down");
-        }
-        println!();
     }
 }
 
-fn handle_packet() {
+fn handle_packet(address_table: HashSet<IpAddr>) {
     let mut cap = Device::lookup().unwrap().unwrap().open().unwrap();
     let mut socket_to_conn: HashMap<SocketWrapper, Connection> = HashMap::new();
+    let parser: PacketParser = PacketParser::new(address_table); 
 
     while let Ok(packet) = cap.next_packet() {
-        if let Some(pack) = pkt::parse_pkt(&packet) {
+        if let Some(pack) = parser.parse_pkt(&packet) {
             let mut socket = Socket::new(NETLINK_SOCK_DIAG).unwrap();
             if let Err(e) = socket.bind_auto() {
                 eprintln!("BIND ERROR: {e}");

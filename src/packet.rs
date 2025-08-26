@@ -1,13 +1,8 @@
-// use core::fmt;
-// use std::mem::size_of;
-use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
-use std::time; 
-use getifaddrs::Interface;
-use pcap::Packet as PcapPkt; 
-use netlink_packet_sock_diag::inet::SocketId;
+use std::{
+    net::{Ipv4Addr, Ipv6Addr, IpAddr},
+    time,
+};
 // etherparse?
-
-use std::hash::{Hash, Hasher};
 
 const ETHER_ADDR_LEN: usize = 6;
 const IPV6_ADDR_LEN: usize = 16;
@@ -307,138 +302,8 @@ impl Packet
             false
         }
     }
-
-    pub fn is_outgoing(&self, addresses: Vec<Interface>) -> Option<bool> {
-        for addr in addresses {
-             
-        }
-        Some(false)
-        // for addr in addresses
-        // if self.src_addr = addr then return Some(true)
-        // else if self.dst_addr = addr then return Some(false)
-        // else return None?
-    }
 }
 
-impl From<&Packet> for SocketId {
-    fn from(pack: &Packet) -> Self {
-        SocketId {
-            source_port: pack.src_port,
-            destination_port: pack.dst_port,
-            source_address: pack.src_addr,
-            destination_address: pack.dst_addr,
-            interface_id: 0,
-            cookie: [0; 8],
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SocketWrapper(pub SocketId);
-
-impl Hash for SocketWrapper {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.source_port.hash(state);
-        self.0.destination_port.hash(state);
-        self.0.source_address.hash(state);
-        self.0.destination_address.hash(state);
-    }
-}
-
-impl PartialEq for SocketWrapper {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.source_port == other.0.source_port &&
-        self.0.destination_port == other.0.destination_port &&
-        self.0.source_address == other.0.source_address &&
-        self.0.destination_address == other.0.destination_address
-    }
-}
-
-impl Eq for SocketWrapper {}
 
 
-pub fn parse_pkt(pkt: &PcapPkt)-> Option<Packet> 
-{ 
-    // let header = pkt.header; 
-    let ethernet: EtherHdr = EtherHdr::to_ether(pkt.data);
-
-    let ipslice = &pkt.data[14..]; 
-    if ethernet.is_ipv4()? {
-        parse_ipv4(ipslice) 
-    } else {
-        parse_ipv6(ipslice)
-    }
-}
-
-fn parse_ipv4(ipslice: &[u8]) -> Option<Packet> 
-{
-    let ipv4: Ipv4Hdr = Ipv4Hdr::to_ipv4(ipslice); 
-    let pclslice: &[u8] = &ipslice[ipv4.header_len()..];
-    let src_addr = IpAddr::V4(Ipv4Addr::from(ipv4.src_addr));
-    let dst_addr = IpAddr::V4(Ipv4Addr::from(ipv4.dst_addr));
-    let outgoing = true; // temp
-
-    match ipv4.is_tcp()? {
-        true => {
-            let tcp: TcpHdr = TcpHdr::to_tcp(pclslice);
-            Some(Packet::new(
-                src_addr, 
-                dst_addr, 
-                tcp.src_p, 
-                tcp.dst_p, 
-                ipv4.pay_len.into(), 
-                outgoing,
-                Protocol::TCP,
-            ))
-        },
-        false => {
-            let udp: UdpHdr = UdpHdr::to_udp(pclslice);
-            Some(Packet::new(
-                src_addr, 
-                dst_addr, 
-                udp.src_p, 
-                udp.dst_p, 
-                ipv4.pay_len.into(), 
-                outgoing,
-                Protocol::UDP,
-            ))
-        },
-    } 
-}
-
-fn parse_ipv6(ipslice: &[u8]) -> Option<Packet>
-{
-    let ipv6: Ipv6Hdr = Ipv6Hdr::to_ipv6(ipslice);
-    let pclslice: &[u8] = &ipslice[40..];
-    let src_addr = IpAddr::V6(Ipv6Addr::from(ipv6.src_addr));
-    let dst_addr = IpAddr::V6(Ipv6Addr::from(ipv6.dst_addr));
-    let outgoing = true; // temp 
-
-    match ipv6.is_tcp()? {
-        true => {
-            let tcp: TcpHdr = TcpHdr::to_tcp(pclslice);
-            Some(Packet::new(
-                src_addr, 
-                dst_addr, 
-                tcp.src_p, 
-                tcp.dst_p, 
-                ipv6.pay_len.into(), 
-                outgoing,
-                Protocol::TCP,
-            ))
-        },
-        false => {
-            let udp: UdpHdr = UdpHdr::to_udp(pclslice);
-            Some(Packet::new(
-                src_addr, 
-                dst_addr, 
-                udp.src_p, 
-                udp.dst_p, 
-                ipv6.pay_len.into(), 
-                outgoing,
-                Protocol::UDP,
-            ))
-        },
-    }
-}
 
