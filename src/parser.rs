@@ -37,47 +37,51 @@ impl PacketParser {
         }
     }
 
-    fn parse_ipv4(&self, ipslice: &[u8]) -> Option<Packet> 
+    fn parse_ipv4(&self, ipslice: &[u8]) -> Option<Packet>
     {
-        let ipv4: Ipv4Hdr = Ipv4Hdr::to_ipv4(ipslice); 
+        let ipv4: Ipv4Hdr = Ipv4Hdr::to_ipv4(ipslice);
+        // Use the actual IPv4 header length
         let pclslice: &[u8] = &ipslice[ipv4.header_len()..];
         let src_addr = IpAddr::V4(Ipv4Addr::from(ipv4.src_addr));
         let dst_addr = IpAddr::V4(Ipv4Addr::from(ipv4.dst_addr));
 
         let outgoing = if self.addresses.contains(&src_addr) {
-            true 
+            true
         } else if self.addresses.contains(&dst_addr) {
             false
         } else {
             return None // update address table?
         };
 
+
         match ipv4.is_tcp()? {
             true => {
                 let tcp: TcpHdr = TcpHdr::to_tcp(pclslice);
+                let payload_len = ipv4.pay_len as usize - ipv4.header_len() - tcp.header_len();
                 Some(Packet::new(
-                    src_addr, 
-                    dst_addr, 
-                    tcp.src_p, 
-                    tcp.dst_p, 
-                    ipv4.pay_len.into(), 
+                    src_addr,
+                    dst_addr,
+                    tcp.src_p,
+                    tcp.dst_p,
+                    payload_len as u32, // Correct payload length calculation
                     outgoing,
                     Protocol::TCP,
                 ))
             },
             false => {
                 let udp: UdpHdr = UdpHdr::to_udp(pclslice);
+                let payload_len = ipv4.pay_len as usize - ipv4.header_len() - 8;
                 Some(Packet::new(
-                    src_addr, 
-                    dst_addr, 
-                    udp.src_p, 
-                    udp.dst_p, 
-                    ipv4.pay_len.into(), 
+                    src_addr,
+                    dst_addr,
+                    udp.src_p,
+                    udp.dst_p,
+                    payload_len as u32, // Correct payload length calculation
                     outgoing,
                     Protocol::UDP,
                 ))
             },
-        } 
+        }
     }
 
     fn parse_ipv6(&self, ipslice: &[u8]) -> Option<Packet>

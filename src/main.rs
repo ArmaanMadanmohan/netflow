@@ -4,7 +4,11 @@ mod parser;
 mod socketwrapper;
 
 use std::{
-    collections::{HashSet, HashMap, hash_map}, fmt::write, fs::{read_dir, File}, io::{BufRead, BufReader, Error, ErrorKind, Read}, option
+    collections::{HashSet, HashMap, hash_map}, 
+    io::{Error, ErrorKind}, 
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
 };
 
 use pcap::Device;
@@ -16,15 +20,12 @@ use netlink_packet_core::{
     NLM_F_REQUEST,
 };
 use std::net::{IpAddr};
-// use netlink_sys;
-// use rufl::string;
 use netlink_sys::{protocols::NETLINK_SOCK_DIAG, Socket, SocketAddr};
 use netlink_packet_sock_diag::{
-    // constants::*,
-    inet::{ExtensionFlags, InetRequest, SocketId, StateFlags, InetResponse}, 
+    inet::{ExtensionFlags, InetRequest, InetResponse, SocketId, StateFlags}, 
     SockDiagMessage, 
     AF_INET, 
-    IPPROTO_TCP
+    IPPROTO_TCP, IPPROTO_UDP
 };
 
 use crate::{
@@ -35,6 +36,8 @@ use crate::{
 
 use getifaddrs::{getifaddrs, InterfaceFlags};
 
+type SockInode = Arc<Mutex<HashMap<SocketWrapper, u32>>>;
+
 // if neither src nor dst are in the address table maybe update table?
 
 
@@ -42,6 +45,44 @@ fn main() {
     let mut address_table: HashSet<IpAddr> = HashSet::new();
     update_addresses(&mut address_table);
     handle_packet(address_table);
+}
+
+fn start_inode_query(mapping: SockInode) {
+    thread::spawn(move || {
+        let mut socket = Socket::new(NETLINK_SOCK_DIAG).unwrap();
+        if let Err(e) = socket.bind_auto() {
+            eprintln!("BIND ERROR: {e}");
+            return;
+        }
+
+        socket.connect(&SocketAddr::new(0, 0)).unwrap();
+
+        loop {
+            // start off with socket dump then see about querying individually 
+            if let Err(e) = send_dump_msg(&socket) { 
+                eprintln!("SEND ERROR: {e}");
+                continue;
+            }
+
+            match recv_dump_msg(&socket) {
+                Ok(responses) => {
+                    let mut cache = mapping.lock().unwrap();
+                    cache.clear();
+
+                    for res in responses {
+                        let sock_id = res.header.socket_id;
+                        let inode = res.header.inode;
+                        let socket_wrapper = SocketWrapper(sock_id);
+                        cache.insert(socket_wrapper, inode);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("RECV ERROR: {e}");
+                }
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
 }
 
 fn update_addresses(address_table: &mut HashSet<IpAddr>) {
@@ -57,21 +98,28 @@ fn handle_packet(address_table: HashSet<IpAddr>) {
     let mut socket_to_conn: HashMap<SocketWrapper, Connection> = HashMap::new();
     let parser: PacketParser = PacketParser::new(address_table); 
 
+    let inode_cache = Arc::new(Mutex::new(HashMap::new()));
+
+    start_inode_query(inode_cache.clone());
+    
+    let mut socket = Socket::new(NETLINK_SOCK_DIAG).unwrap();
+    if let Err(e) = socket.bind_auto() {
+        eprintln!("BIND ERROR: {e}");
+        return;
+    }
+
+    socket.connect(&SocketAddr::new(0, 0)).unwrap();
+
     while let Ok(packet) = cap.next_packet() {
-        if let Some(pack) = parser.parse_pkt(&packet) {
-            let mut socket = Socket::new(NETLINK_SOCK_DIAG).unwrap();
-            if let Err(e) = socket.bind_auto() {
-                eprintln!("BIND ERROR: {e}");
-                return;
-            }
-
-            socket.connect(&SocketAddr::new(0, 0)).unwrap();
-
+        if let Some(mut pack) = parser.parse_pkt(&packet) {
             let sock_id: SocketId = SocketId::from(&pack);
             let socket_wrapper = SocketWrapper(sock_id);
 
-            // matching on `entry` uses one lookup compared to `contains_key`
-            // followed by `get_mut`
+            let cache_lock = inode_cache.lock().unwrap();
+            if let Some(inode) = cache_lock.get(&socket_wrapper).cloned() {
+                println!("{}", inode);
+            }
+
             match socket_to_conn.entry(socket_wrapper) {
                 hash_map::Entry::Occupied(mut entry) => {
                     entry.get_mut().add_packet(pack);
@@ -80,44 +128,23 @@ fn handle_packet(address_table: HashSet<IpAddr>) {
                     entry.insert(Connection::new(pack));
                 }
             }
-
-            println!("{:?}", socket_to_conn);
-            return;
-
-            // if let Err(e) = send_msg(sock_id.clone(), &socket) { // worth cloning or not
-            //     eprintln!("SEND ERROR: {e}");
-            //     return;
-            // }
-            // 
-            // match recv_msg(&socket) {
-            //     Ok(Some(response)) => {
-            //         println!("Response: {:#?}", response);
-            //     }
-            //     Ok(None) => {
-            //         println!("Done!");
-            //     }
-            //     Err(e) => {
-            //         eprintln!("RECV ERROR: {e}");
-            //     }
-            // }
         }
     }
 }
 
-
-fn send_msg(sockid: SocketId, socket: &Socket) -> Result<(), Error> {
+fn send_dump_msg(socket: &Socket) -> Result<(), Error> {
     let mut nl_hdr = NetlinkHeader::default(); 
     nl_hdr.sequence_number = 0;
-    nl_hdr.flags = NLM_F_REQUEST;
+    nl_hdr.flags = NLM_F_REQUEST | NLM_F_DUMP;
     
     let mut packet = NetlinkMessage::new(
         nl_hdr,
         SockDiagMessage::InetRequest(InetRequest {
             family: AF_INET,
-            protocol: IPPROTO_TCP,
+            protocol: IPPROTO_UDP, /* IPPROTO_TCP, */
             extensions: ExtensionFlags::empty(),
             states: StateFlags::all(),
-            socket_id: sockid, 
+            socket_id: SocketId::new_v4(), 
         })
         .into(),
     );
@@ -134,43 +161,102 @@ fn send_msg(sockid: SocketId, socket: &Socket) -> Result<(), Error> {
     Ok(())
 }
 
+// fn send_msg(sockid: SocketId, socket: &Socket) -> Result<(), Error> {
+//     let mut nl_hdr = NetlinkHeader::default(); 
+//     nl_hdr.sequence_number = 0;
+//     nl_hdr.flags = NLM_F_REQUEST;
+//     
+//     let mut packet = NetlinkMessage::new(
+//         nl_hdr,
+//         SockDiagMessage::InetRequest(InetRequest {
+//             family: AF_INET,
+//             protocol: IPPROTO_TCP,
+//             extensions: ExtensionFlags::empty(),
+//             states: StateFlags::all(),
+//             socket_id: sockid, 
+//         })
+//         .into(),
+//     );
+//
+//     packet.finalize();
+//
+//     let mut buf = vec![0; packet.header.length as usize];
+//     assert_eq!(buf.len(), packet.buffer_len());
+//
+//     packet.serialize(&mut buf[..]);
+//
+//     socket.send(&buf[..], 0)?;
+//
+//     Ok(())
+// }
 
-fn recv_msg(socket: &Socket) -> Result<Option<InetResponse>, Error> {
+
+fn recv_dump_msg(socket: &Socket) -> Result<Vec<InetResponse>, Error> {
     let mut receive_buffer = vec![0; 4096];
-    let mut offset = 0;
-    while let Ok(size) = socket.recv(&mut &mut receive_buffer[..], 0) {
-        loop {
-            let bytes = &receive_buffer[offset..];
-            let rx_packet =
-                <NetlinkMessage<SockDiagMessage>>::deserialize(bytes).unwrap();
-            println!("<<< {rx_packet:?}");
-
+    let mut res =  Vec::new();
+    loop {
+        let size = socket.recv(&mut &mut receive_buffer[..], 0)?;
+        let mut offset = 0;
+        while offset < size {
+            let bytes = &receive_buffer[offset..]; 
+            let rx_packet = <NetlinkMessage<SockDiagMessage>>::deserialize(bytes).unwrap();
+            
             match rx_packet.payload {
-                NetlinkPayload::Noop => {}
                 NetlinkPayload::InnerMessage(
-                    SockDiagMessage::InetResponse(response_box),
+                    SockDiagMessage::InetResponse(response_box)
                 ) => {
-                    let response = *response_box;
-                    return Ok(Some(response));
+                    res.push(*response_box);
+                }
+                NetlinkPayload::Done(_) => {
+                    return Ok(res);
                 }
                 NetlinkPayload::Error(_) => {
                     return Err(Error::new(ErrorKind::NotFound, "Socket not found"));
                 }
-                NetlinkPayload::Done(_) => {
-                    return Ok(None);
-                }
-                _ => return Err(Error::new(ErrorKind::InvalidData, "Unexpected payload")) 
+                _ => {}
             }
-
             offset += rx_packet.header.length as usize;
-            if offset == size || rx_packet.header.length == 0 {
-                offset = 0;
-                break;
-            }
         }
+        // println!("{:?}\n", res);
     }
-    Ok(None)
 }
+
+// fn recv_msg(socket: &Socket) -> Result<Option<InetResponse>, Error> {
+//     let mut receive_buffer = vec![0; 4096];
+//     let mut offset = 0;
+//     while let Ok(size) = socket.recv(&mut &mut receive_buffer[..], 0) {
+//         loop {
+//             let bytes = &receive_buffer[offset..];
+//             let rx_packet =
+//                 <NetlinkMessage<SockDiagMessage>>::deserialize(bytes).unwrap();
+//             println!("<<< {rx_packet:?}");
+//
+//             match rx_packet.payload {
+//                 NetlinkPayload::Noop => {}
+//                 NetlinkPayload::InnerMessage(
+//                     SockDiagMessage::InetResponse(response_box),
+//                 ) => {
+//                     let response = *response_box;
+//                     return Ok(Some(response));
+//                 }
+//                 NetlinkPayload::Error(_) => {
+//                     return Err(Error::new(ErrorKind::NotFound, "Socket not found"));
+//                 }
+//                 NetlinkPayload::Done(_) => {
+//                     return Ok(None);
+//                 }
+//                 _ => return Err(Error::new(ErrorKind::InvalidData, "Unexpected payload")) 
+//             }
+//
+//             offset += rx_packet.header.length as usize;
+//             if offset == size || rx_packet.header.length == 0 {
+//                 offset = 0;
+//                 break;
+//             }
+//         }
+//     }
+//     Ok(None)
+// }
 
 // receive pkt, get port and tcp/udp, address
 // look at respective net file and get corresponding inode. 

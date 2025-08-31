@@ -1,3 +1,7 @@
+// for main:
+//
+// use netlink_sys;
+// use rufl::string;
 // fn process_proc() 
 // {
 //     let path = String::from("/proc/");

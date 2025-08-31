@@ -111,7 +111,7 @@ impl Ipv4Hdr
 
     pub fn header_len(&self) -> usize 
     {
-        self.ihl().into()  
+        (self.ihl() * 4) as usize  
     }
 
     pub fn is_tcp(&self) -> Option<bool> 
@@ -187,7 +187,8 @@ pub struct TcpHdr {
     pub dst_p: u16, 
     pub seq: u32,
     pub ack: u32,
-    pub off: u8, // offset or reserved; ordered by BE/LE
+    pub off: u8, // offset and reserved; ordered by BE/LE
+    pub flags: u8,
     pub win: u16,
     pub chk: u16,
     pub urp: u16,
@@ -195,9 +196,8 @@ pub struct TcpHdr {
 
 impl TcpHdr 
 {
-    pub fn to_tcp(data: &[u8]) -> Self 
+    pub fn to_tcp(data: &[u8]) -> Self
     {
-        // sanity checks (len etc..)
         Self {
             src_p: u16::from_be_bytes(
                 [data[0], data[1]]
@@ -212,16 +212,24 @@ impl TcpHdr
                 [data[8], data[9], data[10], data[11]]
             ),
             off: data[12],
+            flags: data[13],
             win: u16::from_be_bytes(
-                [data[13], data[14]]
+                [data[14], data[15]]
             ),
             chk: u16::from_be_bytes(
-                [data[15], data[16]]
+                [data[16], data[17]]
             ),
             urp: u16::from_be_bytes(
-                [data[17], data[18]]
+                [data[18], data[19]]
             ),
-        }   
+        }
+    }
+
+    pub fn header_len(&self) -> usize
+    {
+        // The data offset is in the high 4 bits of the 'off' field.
+        // It's a multiple of 4.
+        ((self.off >> 4) * 4) as usize
     }
 }
 
@@ -301,6 +309,12 @@ impl Packet
         } else {
             false
         }
+    }
+
+    pub fn reverse_direction(&mut self) {
+        let temp: IpAddr = self.src_addr;
+        self.src_addr = self.dst_addr;
+        self.dst_addr = temp;
     }
 }
 

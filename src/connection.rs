@@ -13,7 +13,10 @@ pub struct Connection {
     pub recv: VecDeque<Packet>,
     pub bytes_sent: u32,
     pub bytes_recvd: u32,
-    pub conn_type: Protocol, 
+    pub conn_type: Protocol,
+    pub process_name: Option<String>,
+    pub inode: Option<u32>,
+    pub pid: Option<u32>,
 }
 
 impl Connection {
@@ -26,6 +29,9 @@ impl Connection {
             bytes_sent: 0,
             bytes_recvd: 0,
             conn_type: pkt.protocol, 
+            process_name: None,
+            inode: None,
+            pid: None,
         };
         conn.add_packet(pkt);
         conn
