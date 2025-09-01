@@ -29,9 +29,7 @@ use netlink_packet_sock_diag::{
 };
 
 use crate::{
-    socketwrapper::SocketWrapper,
-    connection::Connection,
-    parser::PacketParser,
+    connection::Connection, packet::Protocol, parser::PacketParser, socketwrapper::SocketWrapper
 };
 
 use getifaddrs::{getifaddrs, InterfaceFlags};
@@ -39,7 +37,6 @@ use getifaddrs::{getifaddrs, InterfaceFlags};
 type SockInode = Arc<Mutex<HashMap<SocketWrapper, u32>>>;
 
 // if neither src nor dst are in the address table maybe update table?
-
 
 fn main() {
     let mut address_table: HashSet<IpAddr> = HashSet::new();
@@ -58,8 +55,13 @@ fn start_inode_query(mapping: SockInode) {
         socket.connect(&SocketAddr::new(0, 0)).unwrap();
 
         loop {
+            { // mutex guard
+                let mut cache = mapping.lock().unwrap();
+                cache.clear();
+            }
+
             // start off with socket dump then see about querying individually 
-            if let Err(e) = send_dump_msg(&socket) { 
+            if let Err(e) = send_dump_msg(&socket, Protocol::TCP) { 
                 eprintln!("SEND ERROR: {e}");
                 continue;
             }
@@ -67,7 +69,6 @@ fn start_inode_query(mapping: SockInode) {
             match recv_dump_msg(&socket) {
                 Ok(responses) => {
                     let mut cache = mapping.lock().unwrap();
-                    cache.clear();
 
                     for res in responses {
                         let sock_id = res.header.socket_id;
@@ -77,10 +78,30 @@ fn start_inode_query(mapping: SockInode) {
                     }
                 }
                 Err(e) => {
-                    eprintln!("RECV ERROR: {e}");
+                    eprintln!("TCP RECV ERROR: {e}");
                 }
             }
-            thread::sleep(Duration::from_millis(1));
+
+            if let Err(e) = send_dump_msg(&socket, Protocol::UDP) {
+                eprintln!("SEND ERROR: {e}");
+                continue;
+            }
+
+            match recv_dump_msg(&socket) {
+                Ok(responses) => {
+                    let mut cache = mapping.lock().unwrap();
+                    for res in responses {
+                        let sock_id = res.header.socket_id;
+                        let inode = res.header.inode;
+                        let socket_wrapper = SocketWrapper(sock_id);
+                        cache.insert(socket_wrapper, inode);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("UDP RECV ERROR: {e}");
+                }
+    }
+            thread::sleep(Duration::from_millis(100));
         }
     });
 }
@@ -132,16 +153,21 @@ fn handle_packet(address_table: HashSet<IpAddr>) {
     }
 }
 
-fn send_dump_msg(socket: &Socket) -> Result<(), Error> {
+fn send_dump_msg(socket: &Socket, pcl: Protocol) -> Result<(), Error> {
     let mut nl_hdr = NetlinkHeader::default(); 
     nl_hdr.sequence_number = 0;
     nl_hdr.flags = NLM_F_REQUEST | NLM_F_DUMP;
+
+    let protocol = match pcl {
+        Protocol::TCP => IPPROTO_TCP,
+        Protocol::UDP => IPPROTO_UDP,
+    };
     
     let mut packet = NetlinkMessage::new(
         nl_hdr,
         SockDiagMessage::InetRequest(InetRequest {
             family: AF_INET,
-            protocol: IPPROTO_UDP, /* IPPROTO_TCP, */
+            protocol: protocol,
             extensions: ExtensionFlags::empty(),
             states: StateFlags::all(),
             socket_id: SocketId::new_v4(), 
@@ -160,36 +186,6 @@ fn send_dump_msg(socket: &Socket) -> Result<(), Error> {
 
     Ok(())
 }
-
-// fn send_msg(sockid: SocketId, socket: &Socket) -> Result<(), Error> {
-//     let mut nl_hdr = NetlinkHeader::default(); 
-//     nl_hdr.sequence_number = 0;
-//     nl_hdr.flags = NLM_F_REQUEST;
-//     
-//     let mut packet = NetlinkMessage::new(
-//         nl_hdr,
-//         SockDiagMessage::InetRequest(InetRequest {
-//             family: AF_INET,
-//             protocol: IPPROTO_TCP,
-//             extensions: ExtensionFlags::empty(),
-//             states: StateFlags::all(),
-//             socket_id: sockid, 
-//         })
-//         .into(),
-//     );
-//
-//     packet.finalize();
-//
-//     let mut buf = vec![0; packet.header.length as usize];
-//     assert_eq!(buf.len(), packet.buffer_len());
-//
-//     packet.serialize(&mut buf[..]);
-//
-//     socket.send(&buf[..], 0)?;
-//
-//     Ok(())
-// }
-
 
 fn recv_dump_msg(socket: &Socket) -> Result<Vec<InetResponse>, Error> {
     let mut receive_buffer = vec![0; 4096];
@@ -221,46 +217,3 @@ fn recv_dump_msg(socket: &Socket) -> Result<Vec<InetResponse>, Error> {
     }
 }
 
-// fn recv_msg(socket: &Socket) -> Result<Option<InetResponse>, Error> {
-//     let mut receive_buffer = vec![0; 4096];
-//     let mut offset = 0;
-//     while let Ok(size) = socket.recv(&mut &mut receive_buffer[..], 0) {
-//         loop {
-//             let bytes = &receive_buffer[offset..];
-//             let rx_packet =
-//                 <NetlinkMessage<SockDiagMessage>>::deserialize(bytes).unwrap();
-//             println!("<<< {rx_packet:?}");
-//
-//             match rx_packet.payload {
-//                 NetlinkPayload::Noop => {}
-//                 NetlinkPayload::InnerMessage(
-//                     SockDiagMessage::InetResponse(response_box),
-//                 ) => {
-//                     let response = *response_box;
-//                     return Ok(Some(response));
-//                 }
-//                 NetlinkPayload::Error(_) => {
-//                     return Err(Error::new(ErrorKind::NotFound, "Socket not found"));
-//                 }
-//                 NetlinkPayload::Done(_) => {
-//                     return Ok(None);
-//                 }
-//                 _ => return Err(Error::new(ErrorKind::InvalidData, "Unexpected payload")) 
-//             }
-//
-//             offset += rx_packet.header.length as usize;
-//             if offset == size || rx_packet.header.length == 0 {
-//                 offset = 0;
-//                 break;
-//             }
-//         }
-//     }
-//     Ok(None)
-// }
-
-// receive pkt, get port and tcp/udp, address
-// look at respective net file and get corresponding inode. 
-// keep track of sources, if it is in existing source then add to the list of packets for that
-// source
-// after a period of time, sum all packets in list together and clear list?
-// keep list of process to inodes
