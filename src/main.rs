@@ -4,11 +4,7 @@ mod parser;
 mod socketwrapper;
 
 use std::{
-    collections::{HashSet, HashMap, hash_map}, 
-    io::{Error, ErrorKind}, 
-    sync::{Arc, Mutex},
-    thread,
-    time::Duration,
+    collections::{hash_map, HashMap, HashSet}, fs::{read_dir, read_to_string}, io::{Error, ErrorKind}, os::linux::fs::MetadataExt, sync::{Arc, Mutex}, thread, time::Duration, u32
 };
 
 use pcap::Device;
@@ -19,6 +15,7 @@ use netlink_packet_core::{
     NLM_F_DUMP, 
     NLM_F_REQUEST,
 };
+use rufl::{file::read_to_lines, string};
 use std::net::{IpAddr};
 use netlink_sys::{protocols::NETLINK_SOCK_DIAG, Socket, SocketAddr};
 use netlink_packet_sock_diag::{
@@ -41,6 +38,7 @@ type SockInode = Arc<Mutex<HashMap<SocketWrapper, u32>>>;
 fn main() {
     let mut address_table: HashSet<IpAddr> = HashSet::new();
     update_addresses(&mut address_table);
+    // inode_to_proc(337230997);
     handle_packet(address_table);
 }
 
@@ -54,7 +52,7 @@ fn start_inode_query(mapping: SockInode) {
 
         socket.connect(&SocketAddr::new(0, 0)).unwrap();
 
-        loop {
+        loop { // try to reduce redundancy here.. maybe another function?
             { // mutex guard
                 let mut cache = mapping.lock().unwrap();
                 cache.clear();
@@ -101,7 +99,7 @@ fn start_inode_query(mapping: SockInode) {
                     eprintln!("UDP RECV ERROR: {e}");
                 }
     }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(500));
         }
     });
 }
@@ -112,6 +110,34 @@ fn update_addresses(address_table: &mut HashSet<IpAddr>) {
             address_table.insert(interface.address);
         }
     }
+}
+
+fn inode_to_proc(inode: u32) -> Option<(u32, String)> {
+    let path = String::from("/proc/"); // or directly Path::new()?
+    let folder = read_dir(path).expect("Error opening /proc path");
+    for entry in folder {
+        let entry = entry.ok()?;
+        let file_name = entry.file_name(); 
+        let file_str = file_name.to_str()?; 
+        if let Ok(pid) = file_str.parse::<u32>() {
+            let fd_path = format!("/proc/{}/fd", pid); // or dir_name
+            let entry_dir = read_dir(fd_path).ok()?;
+            for fd in entry_dir {
+                let fd = fd.ok()?;
+                let fd_path = fd.path();
+                if let Ok(metadata) = fd_path.metadata() {
+                    let file_inode = metadata.st_ino();
+                    if file_inode == inode.into() {
+                        let comm = format!("/proc/{}/comm", pid);
+                        println!("Found! {}", file_inode);
+                        let app = read_to_string(comm).ok()?;
+                        return Some((pid, app));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn handle_packet(address_table: HashSet<IpAddr>) {
@@ -138,7 +164,10 @@ fn handle_packet(address_table: HashSet<IpAddr>) {
 
             let cache_lock = inode_cache.lock().unwrap();
             if let Some(inode) = cache_lock.get(&socket_wrapper).cloned() {
-                println!("{}", inode);
+                // println!("{}", inode);
+                if let Some((pid, app)) = inode_to_proc(inode) {
+                    println!("PID: {}\nApp: {}", pid, app);
+                }
             }
 
             match socket_to_conn.entry(socket_wrapper) {
@@ -213,7 +242,6 @@ fn recv_dump_msg(socket: &Socket) -> Result<Vec<InetResponse>, Error> {
             }
             offset += rx_packet.header.length as usize;
         }
-        // println!("{:?}\n", res);
     }
 }
 

@@ -2,7 +2,12 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr, IpAddr},
     time,
 };
-// etherparse?
+
+const MIN_ETHER_SIZE: usize = 14;
+const MIN_IPV4_SIZE: usize = 20;
+const MIN_IPV6_SIZE: usize = 40;
+const MIN_TCP_SIZE: usize = 20;
+const MIN_UDP_SIZE: usize = 8;
 
 const ETHER_ADDR_LEN: usize = 6;
 const IPV6_ADDR_LEN: usize = 16;
@@ -19,6 +24,12 @@ pub enum Protocol {
     UDP,
 }
 
+#[derive(Debug)] 
+pub enum PacketErr {
+    TooShort,
+    InvalidFormat,
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct EtherHdr {
@@ -29,16 +40,20 @@ pub struct EtherHdr {
 
 impl EtherHdr 
 {
-    pub fn to_ether(data: &[u8]) -> Self 
+    pub fn to_ether(data: &[u8]) -> Result<Self, PacketErr> 
     {
-        // sanity checks (len etc..)
-        Self {
+        if data.len() < MIN_ETHER_SIZE {
+            return Err(PacketErr::TooShort);
+        }
+
+        Ok(Self {
             dst_addr: data[0..ETHER_ADDR_LEN].try_into().unwrap(),
             src_addr: data[ETHER_ADDR_LEN..(ETHER_ADDR_LEN*2)].try_into().unwrap(),
-            ether_type: u16::from_be_bytes(
-                [data[ETHER_ADDR_LEN*2], data[ETHER_ADDR_LEN*2 + 1]]
-            ),
-        }
+            ether_type: u16::from_be_bytes([
+                data[ETHER_ADDR_LEN*2], 
+                data[ETHER_ADDR_LEN*2 + 1]
+            ]),
+        })
     }
 
     pub fn is_ipv4(&self) -> Option<bool> 
@@ -70,33 +85,46 @@ pub struct Ipv4Hdr
 
 impl Ipv4Hdr 
 {
-    pub fn to_ipv4(data: &[u8]) -> Self 
+    pub fn to_ipv4(data: &[u8]) -> Result<Self, PacketErr> 
     {
-        // sanity checks (len etc..)
-        Self {
+        if data.len() < MIN_IPV4_SIZE {
+            return Err(PacketErr::TooShort);
+        } 
+
+        Ok(Self {
             v_hl: data[0],
             tos: data[1],
-            pay_len: u16::from_be_bytes(
-                [data[2], data[3]]
-            ),
-            id: u16::from_be_bytes(
-                [data[4], data[5]]
-            ),
-            off: u16::from_be_bytes(
-                [data[6], data[7]]
-            ),
+            pay_len: u16::from_be_bytes([
+                data[2], 
+                data[3]
+            ]),
+            id: u16::from_be_bytes([
+                data[4], 
+                data[5]
+            ]),
+            off: u16::from_be_bytes([
+                data[6], 
+                data[7]
+            ]),
             ttl: data[8],
             pcl: data[9],
-            chk: u16::from_be_bytes(
-                [data[10], data[11]]
-            ),
-            src_addr: u32::from_be_bytes(
-                [data[12], data[13], data[14], data[15]]
-            ),
-            dst_addr: u32::from_be_bytes(
-                [data[16], data[17], data[18], data[19]]
-            ),
-        }
+            chk: u16::from_be_bytes([
+                data[10],
+                data[11]
+            ]),
+            src_addr: u32::from_be_bytes([
+                data[12], 
+                data[13], 
+                data[14], 
+                data[15]
+            ]),
+            dst_addr: u32::from_be_bytes([
+                data[16], 
+                data[17], 
+                data[18],
+                data[19]
+            ]),
+        })
     }
 
     pub fn version(&self) -> u8 
@@ -138,21 +166,28 @@ pub struct Ipv6Hdr
 
 impl Ipv6Hdr 
 {
-    pub fn to_ipv6(data: &[u8]) -> Self
+    pub fn to_ipv6(data: &[u8]) -> Result<Self, PacketErr>
     {
-        // sanity checks (len etc..)
-        Self {
-            v_tc_flow: u32::from_be_bytes(
-                [data[0], data[1], data[2], data[3]]
-            ),
-            pay_len: u16::from_be_bytes(
-                [data[4], data[5]]
-            ),
+        if data.len() < MIN_IPV6_SIZE {
+            return Err(PacketErr::TooShort);
+        }
+
+        Ok(Self {
+            v_tc_flow: u32::from_be_bytes([
+                data[0], 
+                data[1], 
+                data[2], 
+                data[3]
+            ]),
+            pay_len: u16::from_be_bytes([
+                data[4], 
+                data[5]
+            ]),
             nxt: data[6],
             hop: data[7],
             src_addr: data[8..(IPV6_ADDR_LEN+8)].try_into().unwrap(),
             dst_addr: data[(IPV6_ADDR_LEN+8)..(IPV6_ADDR_LEN*2 + 8)].try_into().unwrap(),
-        }
+        })
     }
 
     pub fn version(&self) -> u8
@@ -196,33 +231,47 @@ pub struct TcpHdr {
 
 impl TcpHdr 
 {
-    pub fn to_tcp(data: &[u8]) -> Self
+    pub fn to_tcp(data: &[u8]) -> Result<Self, PacketErr>
     {
-        Self {
-            src_p: u16::from_be_bytes(
-                [data[0], data[1]]
-            ),
-            dst_p: u16::from_be_bytes(
-                [data[2], data[3]]
-            ),
-            seq: u32::from_be_bytes(
-                [data[4], data[5], data[6], data[7]]
-            ),
-            ack: u32::from_be_bytes(
-                [data[8], data[9], data[10], data[11]]
-            ),
+        if data.len() < MIN_TCP_SIZE {
+            return Err(PacketErr::TooShort);
+        }
+
+        Ok(Self {
+            src_p: u16::from_be_bytes([
+                data[0], 
+                data[1]
+            ]),
+            dst_p: u16::from_be_bytes([
+                data[2], 
+                data[3]
+            ]),
+            seq: u32::from_be_bytes([
+                data[4], 
+                data[5], 
+                data[6], 
+                data[7]
+            ]),
+            ack: u32::from_be_bytes([
+                data[8], 
+                data[9], 
+                data[10], 
+                data[11]
+            ]),
             off: data[12],
             flags: data[13],
-            win: u16::from_be_bytes(
-                [data[14], data[15]]
-            ),
+            win: u16::from_be_bytes([
+                data[14], 
+                data[15]
+            ]),
             chk: u16::from_be_bytes(
                 [data[16], data[17]]
             ),
-            urp: u16::from_be_bytes(
-                [data[18], data[19]]
-            ),
-        }
+            urp: u16::from_be_bytes([
+                data[18], 
+                data[19]
+            ]),
+        })
     }
 
     pub fn header_len(&self) -> usize
@@ -244,22 +293,30 @@ pub struct UdpHdr {
 
 impl UdpHdr 
 {
-    pub fn to_udp(data: &[u8]) -> Self 
+    pub fn to_udp(data: &[u8]) -> Result<Self, PacketErr> 
     {
-        Self {
-            src_p: u16::from_be_bytes(
-                [data[0], data[1]]
-            ),
-            dst_p: u16::from_be_bytes(
-                [data[2], data[3]]
-            ),
-            len: u16::from_be_bytes(
-                [data[4], data[5]]
-            ),
-            chk: u16::from_be_bytes(
-                [data[6], data[7]]
-            ),
+        if data.len() < MIN_UDP_SIZE {
+            return Err(PacketErr::TooShort);
         }
+
+        Ok(Self {
+            src_p: u16::from_be_bytes([
+                data[0], 
+                data[1]
+            ]),
+            dst_p: u16::from_be_bytes([
+                data[2], 
+                data[3]
+            ]),
+            len: u16::from_be_bytes([
+                data[4], 
+                data[5]
+            ]),
+            chk: u16::from_be_bytes([
+                data[6], 
+                data[7]
+            ]),
+        })
     }
 }
 
@@ -317,7 +374,4 @@ impl Packet
         self.dst_addr = temp;
     }
 }
-
-
-
 
